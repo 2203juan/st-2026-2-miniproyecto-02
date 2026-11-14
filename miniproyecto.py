@@ -226,6 +226,9 @@ def graficar_importancia(serie, elegidos):
 # en pocos minutos.
 EPOCAS_MAXIMAS = 300
 TASA = 0.01
+# En Colab con GPU la red y sus tensores van a cuda; sin GPU, a la CPU. Red se
+# encarga de los dos: las clases de cada red no tienen que mover nada.
+DISPOSITIVO = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 class Red:
@@ -245,8 +248,8 @@ class Red:
         if self.secuencia:
             columnas = [f"rezago_{k}" for k in range(REZAGOS, 0, -1)]
             x = (X[columnas].to_numpy() - self.media) / self.desv
-            return torch.tensor(x[:, :, None], dtype=torch.float32)
-        return torch.tensor(self.escala_x.transform(X), dtype=torch.float32)
+            return torch.tensor(x[:, :, None], dtype=torch.float32, device=DISPOSITIVO)
+        return torch.tensor(self.escala_x.transform(X), dtype=torch.float32, device=DISPOSITIVO)
 
     def fit(self, X, z, X_val=None, z_val=None):
         torch.manual_seed(self.semilla)
@@ -254,8 +257,8 @@ class Red:
         self.escala_x = StandardScaler().fit(X)
         x = self.entradas(X)
         objetivo_t = torch.tensor(((z - self.media) / self.desv).to_numpy()[:, None],
-                                  dtype=torch.float32)
-        self.red = self.construir(x.shape[-1])
+                                  dtype=torch.float32, device=DISPOSITIVO)
+        self.red = self.construir(x.shape[-1]).to(DISPOSITIVO)
         optimizador = torch.optim.Adam(self.red.parameters(), lr=TASA)
         perdida = nn.MSELoss()
         self.perdidas = []
@@ -274,7 +277,7 @@ class Red:
     def predict(self, X):
         self.red.eval()
         with torch.no_grad():
-            salida = self.red(self.entradas(X)).numpy()[:, 0]
+            salida = self.red(self.entradas(X)).cpu().numpy()[:, 0]
         return salida * self.desv + self.media
 
 
