@@ -54,16 +54,44 @@ de $P = 1$, solo como contraste y fuera de `metricas.csv`: RMSE 770,98.
 
 ## 2. La tabla supervisada
 
-{{Las columnas de la tabla: qué rezagos, qué variables de fecha y qué
-estadísticas de ventana móvil, con la fórmula de cada una. Qué aprenden los
-modelos (`OBJETIVO`: la serie o su diferencia con el mismo mes del año
-anterior) y por qué.}}
+Cada fila es un mes $t$ y tiene 15 columnas, todas con datos hasta $t-1$:
 
-{{Cómo prueba el guion que ninguna fila ve el mes que predice, y qué
-imprime.}}
+| Columna | Fórmula | Qué aporta |
+|---|---|---|
+| `rezago_k`, $k = 1, \dots, 12$ | $z_{t-k} = y_{t-k} - y_{t-k-12}$ | la diferencia interanual de hace $k$ meses; `rezago_12` es la del mismo mes del año anterior |
+| `mes` | mes del calendario de $t$, de 1 a 12 | se conoce de antemano |
+| `media_3` | $\tfrac{1}{3}(z_{t-1} + z_{t-2} + z_{t-3})$ | el nivel reciente, suavizado |
+| `desv_3` | desviación estándar de $z_{t-1}, z_{t-2}, z_{t-3}$ | qué tan estable estuvo el último trimestre |
 
-{{Cómo funciona el pronóstico recursivo a 12 meses y dónde se ajusta el
-escalador dentro de cada origen del *backtest*.}}
+Las dos ventanas se calculan sobre `z.shift(1)`, la serie corrida un mes,
+para que la fila $t$ nunca incluya $z_t$.
+
+Los modelos aprenden la diferencia con el mismo mes del año anterior,
+`OBJETIVO = "dif12"`:
+
+$$z_t = y_t - y_{t-12}, \qquad \hat y_t = y_{t-12} + \hat z_t.$$
+
+La razón es el miniproyecto 1: ADF no rechazó la raíz unitaria en la serie
+original (valor p 0,0858) y sí en `diff(12)` (0,0016), y de ahí salieron
+$d = 0$ y $D = 1$. Es la misma decisión del SARIMA y de los talleres 3 a 5.
+De los 166 meses quedan 142 filas completas, desde 2006-10: 12 se pierden en
+la diferencia y 12 en `rezago_12`.
+
+`comprobar_sin_fuga` suma 1 000 GW a cada mes, de uno en uno, vuelve a armar
+la tabla y verifica que la fila de ese mes no cambie. Si cambiara, lanzaría
+`AssertionError`. El guion imprime *"sin fuga: 166 meses alterados de uno en
+uno y ninguna fila cambió"*.
+
+El pronóstico a 12 meses es recursivo. En cada paso, `recursivo` agrega el
+mes siguiente como vacío, arma su fila con los datos hasta el mes anterior,
+pronostica $\hat z$, lo pasa a nivel con $\hat y_t = y_{t-12} + \hat z_t$ y
+lo escribe en la serie como si fuera dato. Así, el pronóstico del mes 1 entra
+como `rezago_1` del mes 2, y así hasta el 12. `con_tabla` lo envuelve para el
+*backtest*: en cada origen divide el entrenamiento por `ESCALA`, arma la
+tabla solo con esos meses, crea un modelo nuevo con la fábrica, lo ajusta y
+multiplica el pronóstico por `ESCALA`. El `StandardScaler` de KNN y SVR va
+dentro del `make_pipeline` y el de las redes dentro de `Red.fit`, así que en
+cada origen se ajustan solo con el entrenamiento de ese origen.
 
 ## 3. Aprendizaje automático
 
