@@ -151,7 +151,9 @@ def graficar_serie(serie):
 # ============================================================
 # Lo que aprende cada modelo: "nivel" es la serie tal cual; "dif12" es la
 # diferencia con el mismo mes del año anterior.
-OBJETIVO = "nivel"     # TODO: elija "nivel" o "dif12" y justifíquelo
+# "dif12": en el miniproyecto 1, ADF eligió d = 0 y D = 1, así que los modelos
+# aprenden la diferencia con el mismo mes del año anterior, que es estacionaria.
+OBJETIVO = "dif12"
 REZAGOS = 12
 
 
@@ -165,13 +167,20 @@ def a_nivel(y, z):
 
 
 def tabla_supervisada(z):
-    """TODO: una fila por mes con los rezagos 1 a REZAGOS, al menos el mes del
-    año y al menos una estadística de ventana móvil.
+    """Una fila por mes: rezagos 1 a REZAGOS, el mes del año y dos
+    estadísticas de ventana móvil de tres meses, la media y la desviación.
 
-    Ninguna columna de la fila t puede usar z(t): los rezagos con shift(k) y
-    las ventanas sobre la serie ya corrida un mes.
+    Ninguna columna de la fila t usa z(t): los rezagos salen de shift(k) con
+    k >= 1 y las ventanas se calculan sobre z.shift(1), la serie ya corrida un
+    mes.
     """
-    raise NotImplementedError("tabla supervisada")
+    X = pd.DataFrame({f"rezago_{k}": z.shift(k) for k in range(1, REZAGOS + 1)},
+                     index=z.index)
+    X["mes"] = z.index.month                       # 1 = enero, ..., 12 = diciembre
+    anterior = z.shift(1)                          # hasta t-1
+    X["media_3"] = anterior.rolling(3).mean()      # (z(t-1) + z(t-2) + z(t-3)) / 3
+    X["desv_3"] = anterior.rolling(3).std()        # qué tan disperso estuvo ese trimestre
+    return X
 
 
 def comprobar_sin_fuga(serie):
@@ -191,26 +200,29 @@ def filas_completas(y):
 
 
 def recursivo(ajustado, y, h):
-    """TODO: pronóstico recursivo a h meses.
-
-    Agregue el mes siguiente a y como NaN, arme la última fila de la tabla,
-    pronostique con ajustado.predict, devuelva el pronóstico al nivel con
-    a_nivel y escríbalo como si fuera dato antes de pasar al mes siguiente.
-    Devuelva los h pronósticos.
-    """
-    raise NotImplementedError("pronóstico recursivo")
+    """Pronóstico recursivo a h meses: pronostica un mes, lo escribe en la
+    serie como si fuera dato y sigue con el siguiente."""
+    y = y.copy()
+    for _ in range(h):
+        y.loc[y.index[-1] + pd.offsets.MonthBegin(1)] = np.nan   # el mes siguiente, vacío
+        fila_nueva = tabla_supervisada(objetivo(y)).iloc[[-1]]   # su fila, con datos hasta t-1
+        y.iloc[-1] = a_nivel(y.iloc[:-1], ajustado.predict(fila_nueva)[0])
+    return y.iloc[-h:].to_numpy()
 
 
 def con_tabla(fabrica):
     """Modelo para el backtest: arma la tabla con el entrenamiento del origen,
     ajusta un modelo nuevo y pronostica h meses en modo recursivo. El
-    escalador vive dentro del modelo, así que se ajusta en cada origen."""
+    escalador vive dentro del modelo, así que se ajusta en cada origen.
+    Como en el taller 3, la tabla se arma con entrenamiento / ESCALA y el
+    pronóstico vuelve a MW multiplicado por ESCALA."""
     def modelo(entrenamiento, h):
-        X, z = filas_completas(entrenamiento)
+        y = entrenamiento / ESCALA
+        X, z = filas_completas(y)
         ajustado = fabrica()
         ajustado.fit(X, z)
         ULTIMO["modelo"] = ajustado
-        return recursivo(ajustado, entrenamiento, h)
+        return recursivo(ajustado, y, h) * ESCALA
     return modelo
 
 
