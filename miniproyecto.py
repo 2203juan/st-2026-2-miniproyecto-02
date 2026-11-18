@@ -184,12 +184,21 @@ def tabla_supervisada(z):
 
 
 def comprobar_sin_fuga(serie):
-    """TODO: pruebe en el código que ninguna fila ve el mes que predice.
-
-    Por ejemplo, cambie el valor de cada mes y verifique que su fila de la
-    tabla no cambie. Si una fila cambia, lance AssertionError.
-    """
-    raise NotImplementedError("prueba de que no hay fuga")
+    """Cambia el valor de cada mes, de uno en uno, y verifica que su propia
+    fila de la tabla no cambie. Si cambia, la fila t usa y(t) y se lanza
+    AssertionError."""
+    y = serie / ESCALA
+    original = tabla_supervisada(objetivo(y))
+    for t in y.index:
+        alterada = y.copy()
+        alterada.loc[t] += 1000                    # un cambio enorme en el mes t
+        nueva = tabla_supervisada(objetivo(alterada))
+        if not original.loc[t].equals(nueva.loc[t]):
+            raise AssertionError(f"la fila de {t:%Y-%m} ve el mes que predice")
+    X, _ = filas_completas(y)
+    print(f"  sin fuga: {len(y)} meses alterados de uno en uno y ninguna fila cambió")
+    print(f"  tabla: {len(original)} filas, {len(X)} completas (desde {X.index[0]:%Y-%m}), "
+          f"{original.shape[1]} columnas: {', '.join(original.columns)}")
 
 
 def filas_completas(y):
