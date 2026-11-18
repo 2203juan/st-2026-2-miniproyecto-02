@@ -50,36 +50,89 @@ ULTIMO = {}
 # ============================================================
 # 1. La serie y el modelo a superar
 # ============================================================
-# TODO: los mismos datos del miniproyecto 1: copie la serie a datos/ con su
-# ficha en datos/README.md y cambie estos cuatro datos. La serie de ejemplo
-# solo sirve para probar que el guion corre.
-ARCHIVO = "datos/air_passengers.csv"
-FECHA = "Month"
-VALOR = "#Passengers"
+# La serie del miniproyecto 1: carga media mensual de AEP (PJM), en MW.
+ARCHIVO = "datos/aep_mensual.csv"
+FECHA = "mes"
+VALOR = "AEP_MW"
 PERIODO = 12
+
+# Los modelos trabajan con serie / ESCALA, en GW (valores entre 12,8 y 19,2),
+# y sus pronósticos se multiplican por ESCALA para volver a MW. Es la misma
+# escala del miniproyecto 1 y de los talleres 2 y 3.
+ESCALA = 1000
 
 
 def preparar(serie):
-    """TODO: la misma preparación del miniproyecto 1 (huecos y datos atípicos).
+    """La misma decisión del miniproyecto 1 sobre huecos y datos atípicos.
 
-    Debe devolver una serie sin NaN.
+    Huecos: la serie mensual no tiene meses vacíos, porque el único mes
+    incompleto (agosto de 2018, 49 horas) se descartó al agregar las horas.
+    Si apareciera algún NaN, se interpola linealmente.
+
+    Atípicos: cada mes se compara con el promedio del mismo mes un año antes
+    y un año después, y se marca si la diferencia pasa de 3 desviaciones
+    estándar. Se conservan: son demanda real, no errores de medición.
     """
+    vacios = serie.isna().sum()
+    if vacios:
+        print(f"  se interpolan {vacios} meses vacíos")
+    serie = serie.interpolate(method="linear").dropna()
+
+    # Espaciado mensual: un mes borrado en medio de la serie dejaría un salto
+    # de dos meses entre filas, y shift(12) dejaría de ser "el mismo mes del
+    # año anterior". Agosto de 2018 era el último mes, así que quitarlo solo
+    # acorta la serie: los meses que quedan siguen uno detrás de otro.
+    seguidos = pd.date_range(serie.index[0], periods=len(serie), freq="MS")
+    assert serie.index.equals(seguidos), "la serie tiene meses faltantes"
+    print(f"  espaciado mensual: {len(serie)} meses seguidos, de {serie.index[0]:%Y-%m} "
+          f"a {serie.index[-1]:%Y-%m}, sin saltos")
+
+    vecinos = (serie.shift(PERIODO) + serie.shift(-PERIODO)) / 2
+    diferencia = (serie - vecinos).dropna()
+    z = diferencia / diferencia.std()
+    for mes in z.abs().nlargest(3).index:
+        marca = "  <- atípico (|z| > 3), se conserva" if abs(z[mes]) > 3 else ""
+        print(f"    {mes:%Y-%m}: {serie[mes]:,.0f} MW frente a {vecinos[mes]:,.0f} MW de los "
+              f"años vecinos ({z[mes]:+.1f} desv.){marca}")
     return serie
 
 
-def modelo_clasico(serie):
-    """TODO: devuelva la función modelo(entrenamiento, h) del mejor modelo del
-    miniproyecto 1, con los mismos órdenes y la misma transformación.
+# El SARIMA que sale de la lectura de la ACF y la PACF del miniproyecto 1:
+# d = 0 y D = 1 por ADF, p = 3 por los picos de la PACF en 1 y 3, y en la
+# parte estacional un pico aislado de la ACF en el rezago 12 con una PACF que
+# decae en 12, 24 y 36, es decir, Q = 1 y P = 0. En el miniproyecto 1 el AIC
+# eligió P = 1, que no coincide con esa lectura; aquí se usa P = 0.
+ORDEN = (3, 0, 0)
+ORDEN_ESTACIONAL = (0, 1, 1, PERIODO)
+# El que eligió el AIC en el miniproyecto 1, solo como contraste.
+ORDEN_ESTACIONAL_AIC = (1, 1, 1, PERIODO)
 
-    Copie aquí lo que esa función necesite, como sus variables exógenas.
-    Dentro de modelo, guarde el ajuste en ULTIMO["modelo"] para que la tabla
-    cuente sus parámetros.
-    """
-    raise NotImplementedError("el mejor modelo del miniproyecto 1")
+
+def modelo_clasico(serie, orden_estacional=ORDEN_ESTACIONAL):
+    """La función modelo(entrenamiento, h) del SARIMA(3,0,0)(0,1,1)12 del
+    miniproyecto 1, ajustado sobre la serie en GW en cada origen. Usa la
+    misma clase ARIMA de statsmodels que el miniproyecto 1, para que el
+    ajuste y las métricas sean los mismos."""
+    from statsmodels.tsa.arima.model import ARIMA
+
+    def modelo(entrenamiento, h):
+        ajuste = ARIMA(entrenamiento / ESCALA, order=ORDEN,
+                       seasonal_order=orden_estacional).fit()
+        ULTIMO["modelo"] = ajuste
+        return ajuste.forecast(h).to_numpy() * ESCALA
+    return modelo
 
 
-# TODO: el nombre del modelo, con sus órdenes, como aparece en la tabla.
-NOMBRE_CLASICO = "SARIMA del miniproyecto 1"
+NOMBRE_CLASICO = "SARIMA(3,0,0)(0,1,1)12"
+
+
+def coeficientes_clasico(serie):
+    """Los coeficientes del SARIMA ajustado con toda la serie, en GW."""
+    from statsmodels.tsa.arima.model import ARIMA
+    ajuste = ARIMA(serie / ESCALA, order=ORDEN, seasonal_order=ORDEN_ESTACIONAL).fit()
+    print("  coeficientes con toda la serie: " + ", ".join(
+        f"{nombre} {valor:+.3f}" for nombre, valor in ajuste.params.items()) +
+        f"; AIC {ajuste.aic:.2f}")
 
 
 def graficar_serie(serie):
@@ -409,12 +462,17 @@ def main():
     graficar_serie(serie)
 
     print("1. Línea base y modelo a superar")
-    filas = [fila("estacional ingenuo", serie,
-                  lambda t, h: estacional_ingenuo(t, h, PERIODO))]
+    ingenuo = lambda t, h: estacional_ingenuo(t, h, PERIODO)
+    filas = [fila("estacional ingenuo", serie, ingenuo)]
     elegidos_para_figura = {}
     try:
         clasico = modelo_clasico(serie)
         filas.append(fila(NOMBRE_CLASICO, serie, clasico))
+        coeficientes_clasico(serie)
+        # Contraste: el que eligió el AIC en el miniproyecto 1. No entra a la tabla.
+        print("  contraste, no entra a metricas.csv:")
+        fila("SARIMA(3,0,0)(1,1,1)12, el del AIC", serie,
+             modelo_clasico(serie, ORDEN_ESTACIONAL_AIC))
         elegidos_para_figura[NOMBRE_CLASICO] = clasico
     except NotImplementedError as error:
         pendiente("parte 1", error)
