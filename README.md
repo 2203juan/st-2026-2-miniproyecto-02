@@ -31,7 +31,7 @@ del grupo. Si falta algún dato, se advierte en la realimentación.
 
 | Nombre completo | Código | Correo institucional |
 |---|---|---|
-| | | |
+| Juan José Hoyos | 22507574 | juan.hoyos_u@uao.edu.co |
 | | | |
 | | | |
 
