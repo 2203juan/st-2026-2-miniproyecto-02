@@ -611,6 +611,32 @@ def comparar_por_origen(serie, modelos):
     print("orígenes ganados: " + ", ".join(f"{n} {c}" for n, c in ganador.items()))
 
 
+def peor_mes(serie, modelos):
+    """Qué mes pronostica peor cada modelo. Con los mismos cortes del backtest
+    de comun.py, cada mes del backtest se pronostica desde varios orígenes,
+    a distintos horizontes; su error es el promedio de esos pronósticos
+    menos el real. Guarda resultados/peor_mes.csv."""
+    filas = []
+    primero = len(serie) - N_PRUEBA
+    for nombre, modelo in modelos.items():
+        errores = {}
+        for corte in range(primero, len(serie) - 12 + 1):
+            pronostico = np.asarray(modelo(serie.iloc[:corte], 12))
+            for mes, valor in zip(serie.index[corte:corte + 12], pronostico):
+                errores.setdefault(mes, []).append(valor - serie[mes])
+        error = pd.Series({mes: np.mean(v) for mes, v in errores.items()})
+        peor = error.abs().idxmax()
+        filas.append({"modelo": nombre, "peor mes": f"{peor:%Y-%m}",
+                      "real (MW)": round(serie[peor]), "error medio (MW)": round(error[peor]),
+                      "pronósticos de ese mes": len(errores[peor]),
+                      "segundo peor": f"{error.abs().drop(peor).idxmax():%Y-%m}"})
+    tabla = pd.DataFrame(filas)
+    tabla.to_csv(RESULTADOS / "peor_mes.csv", index=False)
+    print("Mes que cada modelo pronostica peor (error medio = pronóstico - real, "
+          "promediado entre los orígenes que lo pronostican):")
+    print(tabla.to_string(index=False))
+
+
 def pendiente(parte, error):
     print(f"  pendiente: {parte} ({error})")
 
@@ -626,6 +652,7 @@ def main():
     print("1. Línea base y modelo a superar")
     ingenuo = lambda t, h: estacional_ingenuo(t, h, PERIODO)
     filas = [fila("estacional ingenuo", serie, ingenuo)]
+    todos = {"estacional ingenuo": ingenuo}          # para el peor mes de cada modelo
     elegidos_para_figura = {}
     try:
         clasico = modelo_clasico(serie)
@@ -636,6 +663,7 @@ def main():
         fila("SARIMA(3,0,0)(1,1,1)12, el del AIC", serie,
              modelo_clasico(serie, ORDEN_ESTACIONAL_AIC))
         elegidos_para_figura[NOMBRE_CLASICO] = clasico
+        todos[NOMBRE_CLASICO] = clasico
     except NotImplementedError as error:
         pendiente("parte 1", error)
 
@@ -656,6 +684,7 @@ def main():
                           for nombre, (fabrica, _) in REJILLAS.items()}
             filas_aa = [fila(nombre, serie, modelo) for nombre, modelo in modelos_aa.items()]
             filas += filas_aa
+            todos.update(modelos_aa)
             comparar_objetivos(serie, filas_aa)
             mejor_aa = min(filas_aa, key=lambda f: f["RMSE"])["modelo"]
             elegidos_para_figura[mejor_aa] = modelos_aa[mejor_aa]
@@ -668,6 +697,8 @@ def main():
             filas_red = [fila(f"{nombre}, {e} épocas", serie, con_tabla(red(nombre, e)))
                          for nombre, e in epocas.items()]
             filas += filas_red
+            todos.update({f"{nombre}, {e} épocas": con_tabla(red(nombre, e))
+                          for nombre, e in epocas.items()})
             mejor = min(zip(epocas, filas_red), key=lambda par: par[1]["RMSE"])[0]
             elegidos_para_figura[mejor] = con_tabla(red(mejor, epocas[mejor]))
             repetir_con_semillas(serie, mejor, epocas[mejor])
@@ -682,6 +713,7 @@ def main():
     if len(elegidos_para_figura) > 1:
         graficar_pronosticos(serie, elegidos_para_figura)
         comparar_por_origen(serie, elegidos_para_figura)
+    peor_mes(serie, todos)
     print(f"Tiempo total: {time.perf_counter() - inicio:.0f} s")
 
 
