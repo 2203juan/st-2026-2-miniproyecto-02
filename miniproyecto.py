@@ -446,40 +446,84 @@ class MLP(nn.Module):
 
 
 class LSTM(nn.Module):
-    """TODO: nn.LSTM de una capa sobre la secuencia (lote, 12, 1) y una capa
-    lineal que lee el último estado oculto."""
+    """nn.LSTM de una capa sobre la secuencia (lote, 12, 1) y una capa lineal
+    que lee el último estado oculto."""
 
     def __init__(self, ocultas=16):
         super().__init__()
-        raise NotImplementedError("LSTM")
+        self.lstm = nn.LSTM(input_size=1, hidden_size=ocultas, num_layers=1, batch_first=True)
+        self.salida = nn.Linear(ocultas, 1)
+
+    def forward(self, x):
+        _, (oculto, _) = self.lstm(x)        # oculto: (1, lote, ocultas), el último paso
+        return self.salida(oculto[-1])
 
 
-# TODO: la tercera red, a elección: Conv1D, un híbrido (el clásico más una
-# red sobre sus residuos) o un Transformer pequeño. Una Conv1D o un
-# Transformer reciben la secuencia como la LSTM y entran en CANDIDATAS. Un
-# híbrido no pasa por con_tabla: escriba su propia función
-# modelo(entrenamiento, h) y agregue su fila en main.
+class Conv1D(nn.Module):
+    """La tercera red: una convolución de una dimensión sobre la secuencia
+    (lote, 12, 1). Cada filtro mira tres meses seguidos a la vez, como
+    media_3, y lo recorre por los doce rezagos; una capa lineal combina lo
+    que encontró cada filtro en cada posición."""
+
+    def __init__(self, filtros=4, ancho=3):
+        super().__init__()
+        self.conv = nn.Conv1d(in_channels=1, out_channels=filtros, kernel_size=ancho)
+        self.salida = nn.Linear(filtros * (REZAGOS - ancho + 1), 1)
+
+    def forward(self, x):
+        h = torch.relu(self.conv(x.transpose(1, 2)))    # (lote, filtros, 10)
+        return self.salida(h.flatten(1))
 
 
-# Las candidatas: nombre, cómo se construye y si recibe la secuencia.
-# TODO: agregue la LSTM, con secuencia=True, y la tercera red.
+# Las candidatas: nombre, cómo se construye y si recibe la secuencia. La LSTM
+# y la Conv1D llevan pocas unidades porque hay unas 120 filas para entrenar.
 CANDIDATAS = {
     "MLP (8 ocultas)": (lambda n: MLP(n, 8), False),
     "MLP (32 ocultas)": (lambda n: MLP(n, 32), False),
+    "LSTM (8 ocultas)": (lambda n: LSTM(8), True),
+    "Conv1D (4 filtros de 3 meses)": (lambda n: Conv1D(4, 3), True),
 }
 
 
 def validar_redes(serie):
-    """TODO: elija las épocas de cada red con validación temporal.
+    """Elige las épocas de cada red con validación temporal: la tabla de los
+    meses anteriores al backtest, con sus últimos 12 meses como validación."""
+    X, z = filas_completas(serie.iloc[:-N_PRUEBA] / ESCALA)
+    X_ent, z_ent, X_val, z_val = X.iloc[:-12], z.iloc[:-12], X.iloc[-12:], z.iloc[-12:]
+    print(f"  entrena {len(X_ent)} filas ({X_ent.index[0]:%Y-%m} a {X_ent.index[-1]:%Y-%m}), "
+          f"valida {len(X_val)} ({X_val.index[0]:%Y-%m} a {X_val.index[-1]:%Y-%m})")
+    curvas, mejores = {}, {}
+    for nombre, (construir, secuencia) in CANDIDATAS.items():
+        ajustada = Red(construir, secuencia).fit(X_ent, z_ent, X_val, z_val)
+        curvas[nombre] = np.array(ajustada.perdidas)
+        epoca = int(np.argmin(curvas[nombre][:, 1])) + 1
+        mejores[nombre] = epoca
+        parametros = sum(p.numel() for p in ajustada.red.parameters())
+        print(f"  {nombre}: {parametros} parámetros; menor pérdida de validación "
+              f"{curvas[nombre][epoca - 1, 1]:.3f} en la época {epoca} "
+              f"(entrenamiento {curvas[nombre][epoca - 1, 0]:.3f}; en la época "
+              f"{EPOCAS_MAXIMAS}: {curvas[nombre][-1, 0]:.3f} y {curvas[nombre][-1, 1]:.3f})")
 
-    Arme la tabla con serie.iloc[:-N_PRUEBA] y deje sus últimos 12 meses de
-    validación. Entrene cada candidata con Red(...).fit(X_ent, z_ent, X_val,
-    z_val): red.perdidas guarda por época la pérdida de entrenamiento y la de
-    validación. Grafique las curvas en figuras/perdida.png, quédese con el
-    MLP de menor pérdida de validación y devuelva {nombre: épocas}, con las
-    épocas de menor pérdida de validación de cada red.
-    """
-    raise NotImplementedError("validación de las redes")
+    figura, ejes = plt.subplots(2, 2, figsize=(10, 6), sharex=True)
+    for eje, (nombre, curva) in zip(ejes.ravel(), curvas.items()):
+        eje.plot(range(1, len(curva) + 1), curva[:, 0], label="entrenamiento")
+        eje.plot(range(1, len(curva) + 1), curva[:, 1], label="validación")
+        eje.axvline(mejores[nombre], color="gray", linestyle="--")
+        eje.set_title(f"{nombre}: mejor época {mejores[nombre]}", fontsize=10)
+        eje.set_yscale("log")
+        eje.legend(fontsize=8)
+    for eje in ejes[1]:
+        eje.set_xlabel("época")
+    for eje in ejes[:, 0]:
+        eje.set_ylabel("pérdida (MSE escalado)")
+    figura.tight_layout()
+    figura.savefig(FIGURAS / "perdida.png", dpi=120)
+    plt.close(figura)
+
+    mlps = [n for n in CANDIDATAS if n.startswith("MLP")]
+    mlp = min(mlps, key=lambda n: curvas[n][mejores[n] - 1, 1])
+    print(f"  MLP que sigue: {mlp}")
+    return {n: e for n, e in mejores.items() if n == mlp or not n.startswith("MLP")}
 
 
 def red(nombre, epocas, semilla=SEMILLA):
@@ -489,12 +533,17 @@ def red(nombre, epocas, semilla=SEMILLA):
 
 
 def repetir_con_semillas(serie, nombre, epocas):
-    """TODO: la mejor red con cinco semillas, cada una por el backtest.
-
-    Use con_tabla(red(nombre, epocas, semilla)). Guarde resultados/semillas.csv
-    con una fila por semilla e imprima la media y la desviación del RMSE.
-    """
-    raise NotImplementedError("cinco semillas")
+    """La mejor red con cinco semillas, cada una por el backtest."""
+    filas_semilla = []
+    for semilla in range(SEMILLA, SEMILLA + 5):
+        _, promedio = backtest(serie, con_tabla(red(nombre, epocas, semilla)))
+        filas_semilla.append({"semilla": semilla, **promedio.round(2).to_dict()})
+    tabla = pd.DataFrame(filas_semilla)
+    tabla.to_csv(RESULTADOS / "semillas.csv", index=False)
+    print(f"  {nombre}, {epocas} épocas, con cinco semillas:")
+    print("    " + tabla.to_string(index=False).replace("\n", "\n    "))
+    print(f"    RMSE: media {tabla['RMSE'].mean():.2f}, desviación {tabla['RMSE'].std():.2f}; "
+          f"MAE: media {tabla['MAE'].mean():.2f}, desviación {tabla['MAE'].std():.2f}")
 
 
 # ============================================================
@@ -562,6 +611,32 @@ def comparar_por_origen(serie, modelos):
     print("orígenes ganados: " + ", ".join(f"{n} {c}" for n, c in ganador.items()))
 
 
+def peor_mes(serie, modelos):
+    """Qué mes pronostica peor cada modelo. Con los mismos cortes del backtest
+    de comun.py, cada mes del backtest se pronostica desde varios orígenes,
+    a distintos horizontes; su error es el promedio de esos pronósticos
+    menos el real. Guarda resultados/peor_mes.csv."""
+    filas = []
+    primero = len(serie) - N_PRUEBA
+    for nombre, modelo in modelos.items():
+        errores = {}
+        for corte in range(primero, len(serie) - 12 + 1):
+            pronostico = np.asarray(modelo(serie.iloc[:corte], 12))
+            for mes, valor in zip(serie.index[corte:corte + 12], pronostico):
+                errores.setdefault(mes, []).append(valor - serie[mes])
+        error = pd.Series({mes: np.mean(v) for mes, v in errores.items()})
+        peor = error.abs().idxmax()
+        filas.append({"modelo": nombre, "peor mes": f"{peor:%Y-%m}",
+                      "real (MW)": round(serie[peor]), "error medio (MW)": round(error[peor]),
+                      "pronósticos de ese mes": len(errores[peor]),
+                      "segundo peor": f"{error.abs().drop(peor).idxmax():%Y-%m}"})
+    tabla = pd.DataFrame(filas)
+    tabla.to_csv(RESULTADOS / "peor_mes.csv", index=False)
+    print("Mes que cada modelo pronostica peor (error medio = pronóstico - real, "
+          "promediado entre los orígenes que lo pronostican):")
+    print(tabla.to_string(index=False))
+
+
 def pendiente(parte, error):
     print(f"  pendiente: {parte} ({error})")
 
@@ -577,6 +652,7 @@ def main():
     print("1. Línea base y modelo a superar")
     ingenuo = lambda t, h: estacional_ingenuo(t, h, PERIODO)
     filas = [fila("estacional ingenuo", serie, ingenuo)]
+    todos = {"estacional ingenuo": ingenuo}          # para el peor mes de cada modelo
     elegidos_para_figura = {}
     try:
         clasico = modelo_clasico(serie)
@@ -587,6 +663,7 @@ def main():
         fila("SARIMA(3,0,0)(1,1,1)12, el del AIC", serie,
              modelo_clasico(serie, ORDEN_ESTACIONAL_AIC))
         elegidos_para_figura[NOMBRE_CLASICO] = clasico
+        todos[NOMBRE_CLASICO] = clasico
     except NotImplementedError as error:
         pendiente("parte 1", error)
 
@@ -607,6 +684,7 @@ def main():
                           for nombre, (fabrica, _) in REJILLAS.items()}
             filas_aa = [fila(nombre, serie, modelo) for nombre, modelo in modelos_aa.items()]
             filas += filas_aa
+            todos.update(modelos_aa)
             comparar_objetivos(serie, filas_aa)
             mejor_aa = min(filas_aa, key=lambda f: f["RMSE"])["modelo"]
             elegidos_para_figura[mejor_aa] = modelos_aa[mejor_aa]
@@ -619,6 +697,8 @@ def main():
             filas_red = [fila(f"{nombre}, {e} épocas", serie, con_tabla(red(nombre, e)))
                          for nombre, e in epocas.items()]
             filas += filas_red
+            todos.update({f"{nombre}, {e} épocas": con_tabla(red(nombre, e))
+                          for nombre, e in epocas.items()})
             mejor = min(zip(epocas, filas_red), key=lambda par: par[1]["RMSE"])[0]
             elegidos_para_figura[mejor] = con_tabla(red(mejor, epocas[mejor]))
             repetir_con_semillas(serie, mejor, epocas[mejor])
@@ -633,6 +713,7 @@ def main():
     if len(elegidos_para_figura) > 1:
         graficar_pronosticos(serie, elegidos_para_figura)
         comparar_por_origen(serie, elegidos_para_figura)
+    peor_mes(serie, todos)
     print(f"Tiempo total: {time.perf_counter() - inicio:.0f} s")
 
 

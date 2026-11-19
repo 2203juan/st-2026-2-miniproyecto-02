@@ -1,0 +1,10 @@
+modelo,peor mes,real (MW),error medio (MW),pronósticos de ese mes,segundo peor
+estacional ingenuo,2018-01,17595,-2029,7,2017-08
+"SARIMA(3,0,0)(0,1,1)12",2017-02,14666,2208,7,2017-01
+KNN,2016-12,15731,-1844,5,2018-01
+SVR,2018-01,17595,-1890,7,2016-08
+Random Forest,2018-01,17595,-2185,7,2016-12
+XGBoost,2018-01,17595,-2214,7,2016-12
+"MLP (8 ocultas), 63 épocas",2017-02,14666,2016,7,2016-08
+"LSTM (8 ocultas), 161 épocas",2018-01,17595,-2470,7,2017-01
+"Conv1D (4 filtros de 3 meses), 47 épocas",2017-02,14666,2365,7,2018-01

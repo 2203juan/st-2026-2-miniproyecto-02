@@ -33,7 +33,7 @@ del grupo. Si falta algún dato, se advierte en la realimentación.
 |---|---|---|
 | Juan José Hoyos | 22507574 | juan.hoyos_u@uao.edu.co |
 | Ana Maria Bolaños | 22505061 | ana_mar.bolanos@uao.edu.co|
-| | | |
+| Juan Carlos Mora | 22505522 | juan_car.morasegura@uao.edu.co |
 
 ## Entrega
 
