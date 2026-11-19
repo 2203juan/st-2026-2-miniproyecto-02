@@ -182,18 +182,73 @@ entrenamiento (19 213 MW, 2007-02) supera al del *backtest* (17 595).
 
 ## 4. Aprendizaje profundo
 
-{{Las tres redes: arquitectura, número de parámetros y cómo recibe cada una
-la entrada (columnas sueltas o secuencia). Cuál es la tercera red y por qué
-la eligió el grupo.}}
+Las tres redes se entrenan con la clase `Red` del guion: Adam con tasa 0,01,
+pérdida MSE y todo el entrenamiento en un solo lote. `Red` estandariza $X$ y
+$z$ con lo que ve en `fit`.
+
+| Red | Arquitectura | Entrada | Parámetros |
+|---|---|---|---|
+| MLP | 15 → 8 (ReLU) → 1 | las 15 columnas sueltas | 137 |
+| MLP (candidata) | 15 → 32 (ReLU) → 1 | las 15 columnas sueltas | 545 |
+| LSTM | `nn.LSTM` de 1 capa con 8 unidades, lineal 8 → 1 sobre el último estado | la secuencia de 12 rezagos, forma (lote, 12, 1) | 361 |
+| Conv1D | 4 filtros de ancho 3, ReLU, lineal 40 → 1 | la secuencia de 12 rezagos, forma (lote, 12, 1) | 57 |
+
+La tercera red es una Conv1D. Cada filtro mira tres meses seguidos y se
+desliza por los doce rezagos, lo mismo que hace `media_3` pero con pesos que
+la red aprende. La elegimos por dos datos del grupo: `media_3` es la columna
+que más pesa en los dos ensambles, y la PACF del miniproyecto 1 marcaba los
+rezagos 1 y 3. Además es la más pequeña de las tres (57 parámetros), lo que
+importa con poco más de 100 filas para entrenar. A la LSTM le dimos 8
+unidades en lugar de 16 por la misma razón: con 16 tendría 1 233 parámetros.
 
 ![Curvas de pérdida](../figuras/perdida.png)
 
-{{Lectura de las curvas: dónde empieza el sobreajuste, cuántas épocas se
-eligieron para cada red y qué tamaño de MLP quedó.}}
+Las épocas se eligieron con la tabla anterior al *backtest*: entrenamiento de
+2006-10 a 2015-07 (106 filas) y validación de 2015-08 a 2016-07 (12 meses).
+En las cuatro curvas la pérdida de entrenamiento baja casi todo el tiempo y
+la de validación toca un mínimo y vuelve a subir: desde ahí la red memoriza
+el entrenamiento.
 
-{{La mejor red con cinco semillas: el RMSE de cada una, la media y la
-desviación. Si la diferencia con el clásico es mayor o menor que esa
-desviación.}}
+| Red | Mejor época | Validación en esa época | Entrenamiento / validación en la época 300 |
+|---|---|---|---|
+| MLP (8 ocultas) | 63 | 0,478 | 0,068 / 1,567 |
+| MLP (32 ocultas) | 28 | 0,548 | 0,001 / 1,234 |
+| LSTM (8 ocultas) | 159 | 0,923 | 0,054 / 1,375 |
+| Conv1D | 47 | 0,849 | 0,274 / 0,924 |
+
+En el MLP de 32 ocultas la separación es la mayor: en la época 300 su
+pérdida de entrenamiento es 0,001 y la de validación 1,234. Tiene 545
+parámetros para 106 filas. Quedó el MLP de 8 ocultas,
+con menor pérdida de validación (0,478 frente a 0,548), y se entrena 63
+épocas. La Conv1D es la que menos se separa: en la época 300 su validación
+(0,924) apenas pasa de su mínimo (0,849).
+
+En el *backtest*, el MLP de 8 ocultas fue la mejor red (RMSE 1 019,65), por
+delante de la Conv1D (1 110,41) y la LSTM (1 179,04). Con cinco semillas:
+
+| Semilla | RMSE | MAE | MAPE (%) |
+|---|---|---|---|
+| 2026 | 1 019,65 | 851,40 | 5,72 |
+| 2027 | 1 103,20 | 936,87 | 6,32 |
+| 2028 | 1 019,34 | 841,81 | 5,63 |
+| 2029 | 1 203,52 | 1 030,87 | 6,92 |
+| 2030 | 1 070,05 | 891,57 | 6,01 |
+
+El RMSE tiene media 1 083,15 y desviación 76,10. La distancia al SARIMA es
+1 083,15 − 753,50 = 329,65, unas cuatro desviaciones. Incluso la mejor
+semilla (1 019,34) queda 266 MW por encima, así que la diferencia con el
+SARIMA no depende de la semilla.
+
+Los talleres 4 y 5 entrenan las mismas familias con otra receta: Adam con
+tasa `1e-3`, hasta 500 épocas con parada temprana de paciencia 30, los
+últimos 24 meses para validar y la tabla de 14 columnas, sin `desv_3`. En el
+mismo *backtest*, el MLP de 32 neuronas dio MAE 910,6, la LSTM de 32
+unidades 812,1, la Conv1D de 8 filtros de 3 meses 841,4 y el Transformer
+855,7. Ninguna supera al estacional ingenuo (763,24), igual que aquí. En el
+taller 5 también probamos el híbrido, el SARIMA del taller 2 más un MLP sobre
+sus residuos: bajó el RMSE de ese SARIMA en 1,3 MW, subió su MAE en 22,4 y
+agregó 257 parámetros. Con otra receta y otros tamaños, las redes quedan en
+el mismo lugar frente al SARIMA.
 
 ## 5. La tabla y la elección
 
