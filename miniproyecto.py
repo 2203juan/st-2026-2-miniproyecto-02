@@ -550,6 +550,18 @@ def graficar_pronosticos(serie, modelos):
     plt.close(figura)
 
 
+def comparar_por_origen(serie, modelos):
+    """RMSE de cada modelo elegido en cada origen del backtest: en qué tramos
+    gana el clásico y en cuáles lo alcanza el mejor de los otros."""
+    por_origen = pd.DataFrame({nombre: backtest(serie, modelo)[0].set_index("origen")["RMSE"]
+                               for nombre, modelo in modelos.items()})
+    por_origen.index = por_origen.index.strftime("%Y-%m")
+    print("RMSE por origen de los modelos de la figura (MW):")
+    print(por_origen.round(0).to_string())
+    ganador = por_origen.idxmin(axis=1).value_counts()
+    print("orígenes ganados: " + ", ".join(f"{n} {c}" for n, c in ganador.items()))
+
+
 def pendiente(parte, error):
     print(f"  pendiente: {parte} ({error})")
 
@@ -620,6 +632,7 @@ def main():
     print("Mejor modelo por RMSE:", tabla.iloc[0]["modelo"])
     if len(elegidos_para_figura) > 1:
         graficar_pronosticos(serie, elegidos_para_figura)
+        comparar_por_origen(serie, elegidos_para_figura)
     print(f"Tiempo total: {time.perf_counter() - inicio:.0f} s")
 
 
