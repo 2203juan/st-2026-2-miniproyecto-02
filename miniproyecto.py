@@ -9,6 +9,7 @@ marcadas con TODO las completa el grupo; mientras falten, el guion las
 reporta como pendientes y sigue. El informe, docs/informe.md, cita las cifras
 y las figuras que produce este guion.
 """
+import inspect
 import time
 import warnings
 
@@ -259,31 +260,61 @@ def xgboost(max_depth=3, learning_rate=0.1):
                         random_state=SEMILLA)
 
 
-# TODO: complete cada rejilla con dos a cuatro valores por hiperparámetro.
+# Dos a cuatro valores por hiperparámetro, siempre con el valor por defecto
+# de la fábrica, para ver si el ajuste lo mejora. C y epsilon de SVR están en
+# GW, porque la tabla se arma con la serie escalada.
 REJILLAS = {
-    "KNN": (knn, {"n_neighbors": [5]}),
-    "SVR": (svr, {"C": [1.0], "epsilon": [0.1]}),
-    "Random Forest": (bosque, {"max_depth": [None], "min_samples_leaf": [1]}),
-    "XGBoost": (xgboost, {"max_depth": [3], "learning_rate": [0.1]}),
+    "KNN": (knn, {"n_neighbors": [3, 5, 10, 20]}),
+    "SVR": (svr, {"C": [0.1, 1.0, 10.0], "epsilon": [0.05, 0.1, 0.3]}),
+    "Random Forest": (bosque, {"max_depth": [None, 3, 6], "min_samples_leaf": [1, 3, 5]}),
+    "XGBoost": (xgboost, {"max_depth": [2, 3, 5], "learning_rate": [0.03, 0.1, 0.3]}),
 }
+# Validación temporal: cinco pliegues de seis meses, siempre hacia adelante.
+VALIDACION = TimeSeriesSplit(n_splits=5, test_size=6)
 
 
 def sin_prefijo(parametros):
     return {nombre.split("__")[-1]: valor for nombre, valor in parametros.items()}
 
 
-def ajustar_hiperparametros(serie):
-    """TODO: para cada modelo de REJILLAS, la combinación con menor RMSE en
-    validación temporal.
+def con_prefijo(fabrica, rejilla):
+    """En un make_pipeline las claves llevan el nombre del paso delante."""
+    modelo = fabrica()
+    if not hasattr(modelo, "steps"):
+        return rejilla
+    paso = modelo.steps[-1][0]
+    return {f"{paso}__{nombre}": valores for nombre, valores in rejilla.items()}
 
-    Arme la tabla con serie.iloc[:-N_PRUEBA], para que ninguno de los meses
-    del backtest decida, y busque con GridSearchCV y TimeSeriesSplit. KNN y
-    SVR son make_pipeline: sus claves en la rejilla llevan el prefijo del paso
-    (kneighborsregressor__n_neighbors). Imprima lo elegido y su RMSE de
-    validación. Devuelva {nombre: {hiperparámetro: valor}}; sin_prefijo
-    quita el prefijo.
-    """
-    raise NotImplementedError("hiperparámetros con validación temporal")
+
+def ajustar_hiperparametros(serie):
+    """Para cada modelo de REJILLAS, la combinación con menor RMSE en
+    validación temporal, usando solo los meses anteriores al backtest."""
+    X_val, z_val = filas_completas(serie.iloc[:-N_PRUEBA] / ESCALA)
+    elegidos = {}
+    print(f"  tabla de validación: {len(X_val)} filas, de {X_val.index[0]:%Y-%m} a "
+          f"{X_val.index[-1]:%Y-%m}; el backtest empieza después de {serie.index[-N_PRUEBA - 1]:%Y-%m}")
+    for i, (entrena, valida) in enumerate(VALIDACION.split(X_val), 1):
+        print(f"    pliegue {i}: entrena {len(entrena)} filas, valida "
+              f"{X_val.index[valida[0]]:%Y-%m} a {X_val.index[valida[-1]]:%Y-%m}")
+    for nombre, (fabrica, rejilla) in REJILLAS.items():
+        busqueda = GridSearchCV(fabrica(), con_prefijo(fabrica, rejilla), cv=VALIDACION,
+                                scoring="neg_root_mean_squared_error")
+        busqueda.fit(X_val, z_val)
+        elegidos[nombre] = sin_prefijo(busqueda.best_params_)
+        resultados = pd.DataFrame([sin_prefijo(p) for p in busqueda.cv_results_["params"]])
+        resultados["RMSE (MW)"] = -busqueda.cv_results_["mean_test_score"] * ESCALA
+        # La fila de los valores por defecto de la fábrica (todas las rejillas lo incluyen)
+        por_defecto = {k: p.default for k, p in inspect.signature(fabrica).parameters.items()}
+        igual = lambda v, d: pd.isna(v) if d is None else v == d   # None queda como NaN
+        es_defecto = np.all([[igual(v, por_defecto[k]) for v in resultados[k]] for k in rejilla],
+                            axis=0)
+        defecto = resultados.loc[es_defecto, "RMSE (MW)"]
+        print(f"  {nombre}: elegido {elegidos[nombre]}, RMSE de validación "
+              f"{-busqueda.best_score_ * ESCALA:.1f} MW; con los valores por defecto "
+              f"{defecto.iloc[0]:.1f} MW ({len(resultados)} combinaciones)")
+        print("    " + resultados.sort_values("RMSE (MW)").round({"RMSE (MW)": 1}).to_string(index=False)
+              .replace("\n", "\n    "))
+    return elegidos
 
 
 def graficar_importancia(serie, elegidos):

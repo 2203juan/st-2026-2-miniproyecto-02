@@ -1,3 +1,3 @@
 modelo,RMSE,MAE,MAPE,parametros,segundos
-"SARIMA(3,0,0)(0,1,1)12",753.5,586.96,3.99,5,0.9
+"SARIMA(3,0,0)(0,1,1)12",753.51,586.96,3.99,5,2.4
 estacional ingenuo,935.52,763.24,5.09,0,0.0
