@@ -533,12 +533,17 @@ def red(nombre, epocas, semilla=SEMILLA):
 
 
 def repetir_con_semillas(serie, nombre, epocas):
-    """TODO: la mejor red con cinco semillas, cada una por el backtest.
-
-    Use con_tabla(red(nombre, epocas, semilla)). Guarde resultados/semillas.csv
-    con una fila por semilla e imprima la media y la desviación del RMSE.
-    """
-    raise NotImplementedError("cinco semillas")
+    """La mejor red con cinco semillas, cada una por el backtest."""
+    filas_semilla = []
+    for semilla in range(SEMILLA, SEMILLA + 5):
+        _, promedio = backtest(serie, con_tabla(red(nombre, epocas, semilla)))
+        filas_semilla.append({"semilla": semilla, **promedio.round(2).to_dict()})
+    tabla = pd.DataFrame(filas_semilla)
+    tabla.to_csv(RESULTADOS / "semillas.csv", index=False)
+    print(f"  {nombre}, {epocas} épocas, con cinco semillas:")
+    print("    " + tabla.to_string(index=False).replace("\n", "\n    "))
+    print(f"    RMSE: media {tabla['RMSE'].mean():.2f}, desviación {tabla['RMSE'].std():.2f}; "
+          f"MAE: media {tabla['MAE'].mean():.2f}, desviación {tabla['MAE'].std():.2f}")
 
 
 # ============================================================
