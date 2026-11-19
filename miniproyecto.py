@@ -318,10 +318,24 @@ def ajustar_hiperparametros(serie):
 
 
 def graficar_importancia(serie, elegidos):
-    """TODO: importancia de las variables de Random Forest y XGBoost
-    (feature_importances_), ajustados con lo elegido; guarde
-    figuras/importancia.png."""
-    raise NotImplementedError("importancia de variables")
+    """Importancia de las variables de Random Forest y XGBoost, ajustados con
+    lo elegido y la tabla de los meses anteriores al backtest."""
+    X_val, z_val = filas_completas(serie.iloc[:-N_PRUEBA] / ESCALA)
+    figura, ejes = plt.subplots(1, 2, figsize=(10, 4.2), sharey=True)
+    for eje, nombre in zip(ejes, ["Random Forest", "XGBoost"]):
+        fabrica, _ = REJILLAS[nombre]
+        ajustado = fabrica(**elegidos[nombre]).fit(X_val, z_val)
+        importancia = pd.Series(ajustado.feature_importances_, index=X_val.columns)
+        print(f"  importancia en {nombre}: " + ", ".join(
+            f"{c} {v:.3f}" for c, v in importancia.sort_values(ascending=False).head(5).items()))
+        print(f"    mes {importancia['mes']:.3f}, desv_3 {importancia['desv_3']:.3f}")
+        eje.barh(importancia.index, importancia.to_numpy())
+        eje.set_title(nombre)
+        eje.set_xlabel("importancia (suma 1)")
+    ejes[0].invert_yaxis()
+    figura.tight_layout()
+    figura.savefig(FIGURAS / "importancia.png", dpi=120)
+    plt.close(figura)
 
 
 # ============================================================
