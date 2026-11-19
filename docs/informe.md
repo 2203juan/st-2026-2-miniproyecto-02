@@ -95,16 +95,90 @@ cada origen se ajustan solo con el entrenamiento de ese origen.
 
 ## 3. Aprendizaje automático
 
-{{La rejilla de cada modelo, con qué datos y con qué validación temporal se
-eligió, y los hiperparámetros elegidos con su RMSE de validación. Por qué
-ninguno de los meses del *backtest* participa en la elección.}}
+Los hiperparámetros se eligieron con la tabla de `serie.iloc[:-24]`: 118
+filas, de 2006-10 a 2016-07. 2016-07 es el primer origen del *backtest*, el
+último mes de entrenamiento antes del primer mes pronosticado (2016-08), así
+que ninguna fila es posterior a ese origen. `GridSearchCV` probó cada rejilla con
+`TimeSeriesSplit(n_splits=5, test_size=6)` y RMSE como criterio. Los cinco
+pliegues entrenan con 88 a 112 filas y validan seis meses hacia adelante,
+de 2014-02 a 2016-07. Si los meses del *backtest* ayudaran a elegir, su
+error dejaría de medir un pronóstico real, porque el modelo ya se habría
+acomodado a ellos. Cada rejilla incluye el valor por defecto de su fábrica.
+
+| Modelo | Rejilla | Elegido | RMSE de validación | Por defecto |
+|---|---|---|---|---|
+| KNN | `n_neighbors` ∈ {3, 5, 10, 20} | `n_neighbors=10` | 661,0 MW | 674,6 MW |
+| SVR | `C` ∈ {0,1; 1; 10}, `epsilon` ∈ {0,05; 0,1; 0,3} | `C=1`, `epsilon=0.3` | 700,1 MW | 717,4 MW |
+| Random Forest | `max_depth` ∈ {None, 3, 6}, `min_samples_leaf` ∈ {1, 3, 5} | `None`, `1` | 710,1 MW | 710,1 MW |
+| XGBoost | `max_depth` ∈ {2, 3, 5}, `learning_rate` ∈ {0,03; 0,1; 0,3} | `max_depth=5`, `learning_rate=0.03` | 734,2 MW | 788,2 MW |
+
+En Random Forest ganaron los valores por defecto. En el taller 3, con la
+misma validación y 14 columnas (sin `desv_3`), KNN también eligió 10 vecinos,
+y el Random Forest ajustado no mejoró al de valores por defecto en el
+*backtest* (MAE 804,0 frente a 803,4). En SVR, `C` y `epsilon`
+están en GW porque la tabla se arma con la serie escalada: el margen elegido
+es de 300 MW.
 
 ![Importancia de las variables](../figuras/importancia.png)
 
-{{Qué variables pesan más en Random Forest y en XGBoost, y si coinciden con
-los rezagos que marcaba la PACF en el miniproyecto 1.}}
+En los dos ensambles, ajustados con lo elegido y la misma tabla de 118 filas,
+`media_3` es la columna que más pesa: 0,217 en Random Forest y 0,334 en
+XGBoost. Le siguen `rezago_1` (0,177) y `rezago_12` (0,113) en Random Forest,
+y `rezago_12` (0,094) y `rezago_1` (0,083) en XGBoost. Coinciden con la PACF
+de `diff(12)` del miniproyecto 1, que salía de las bandas en los rezagos 1
+(+0,44), 3 (+0,27), 12 (−0,32), 21 y 24. `rezago_3` aparece quinto en Random
+Forest (0,061) y `media_3` ya lo contiene. Los rezagos 21 y 24 no están en la
+tabla, que llega hasta el 12. `mes` pesa poco (0,033 y 0,039), porque la
+diferencia de 12 meses ya quitó la estacionalidad. `desv_3` tampoco aporta
+mucho (0,043 y 0,047).
 
-{{RMSE, MAE y MAPE de los cuatro modelos y cuál gana entre ellos.}}
+Con lo elegido, los cuatro pasan por el *backtest* común:
+
+| Modelo | RMSE | MAE | MAPE (%) |
+|---|---|---|---|
+| KNN (`n_neighbors=10`) | 904,24 | 741,08 | 4,95 |
+| Random Forest | 970,03 | 810,60 | 5,38 |
+| SVR (`C=1`, `epsilon=0.3`) | 986,62 | 848,31 | 5,66 |
+| XGBoost (`max_depth=5`, `learning_rate=0.03`) | 1 029,48 | 822,98 | 5,46 |
+
+Gana KNN en las tres métricas, y es el único de los cuatro que supera al
+estacional ingenuo (RMSE 935,52). XGBoost queda último por RMSE pero tercero
+por MAE. Frente a SVR, su error promedio es menor (822,98 contra 848,31) y su
+RMSE mayor (1 029,48 contra 986,62); el RMSE eleva cada error al cuadrado
+antes de promediar, así que esa combinación indica que los errores de
+XGBoost se reparten de forma más desigual que los de SVR, con algunos meses
+más altos.
+
+Todos aprenden `dif12`. Para poner a prueba esa decisión, el guion repite la
+parte 3 con `OBJETIVO = "nivel"`: la misma rejilla, los mismos cinco pliegues
+de validación (de 2014-02 a 2016-07) y después el *backtest*. Con `dif12` el
+pronóstico de un paso es $\hat y_t = y_{t-12} + \hat z_t$ con $y_{t-12}$ real,
+así que el error en $z$ es el mismo error en el nivel y los RMSE de
+validación de los dos objetivos se comparan directamente. La tabla queda en
+`resultados/objetivo.csv`:
+
+| Modelo | Validación, `dif12` | Validación, nivel | *Backtest*, `dif12` | *Backtest*, nivel |
+|---|---|---|---|---|
+| KNN | 661,0 | 942,6 | 904,2 | 872,3 |
+| SVR | 700,1 | 840,8 | 986,6 | 761,8 |
+| Random Forest | 710,1 | 697,8 | 970,0 | 926,1 |
+| XGBoost | 734,2 | 779,6 | 1 029,5 | 839,6 |
+
+En validación, `dif12` gana en KNN, SVR y XGBoost, y el nivel solo en Random
+Forest (697,8 frente a 710,1). El menor RMSE de validación de los ocho es el
+de KNN con `dif12` (661,0). Con eso y con la prueba ADF dejamos `dif12`.
+
+En el *backtest* pasa lo contrario: los cuatro mejoran con el nivel. El
+mejor es SVR sobre el nivel (`C=1`, `epsilon=0.05`), con RMSE 761,76 y MAE
+610,90, que queda 8 MW por encima del SARIMA en RMSE y 24 MW en MAE. Ese
+resultado lo vimos después de decidir. Si cambiáramos el
+objetivo por él, los 24 meses del *backtest* habrían elegido el modelo, y su
+error dejaría de medir un pronóstico real, que es la misma razón por la que
+el enunciado no deja elegir los hiperparámetros con esos meses. Lo dejamos
+como resultado aparte. En el taller 3, con los valores por defecto, los dos
+ensambles también habían mejorado sobre el nivel en el *backtest*. En AEP el
+nivel no obliga a los árboles a extrapolar, porque el máximo del
+entrenamiento (19 213 MW, 2007-02) supera al del *backtest* (17 595).
 
 ## 4. Aprendizaje profundo
 

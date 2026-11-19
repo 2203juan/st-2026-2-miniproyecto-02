@@ -9,6 +9,7 @@ marcadas con TODO las completa el grupo; mientras falten, el guion las
 reporta como pendientes y sigue. El informe, docs/informe.md, cita las cifras
 y las figuras que produce este guion.
 """
+import inspect
 import time
 import warnings
 
@@ -259,38 +260,117 @@ def xgboost(max_depth=3, learning_rate=0.1):
                         random_state=SEMILLA)
 
 
-# TODO: complete cada rejilla con dos a cuatro valores por hiperparámetro.
+# Dos a cuatro valores por hiperparámetro, siempre con el valor por defecto
+# de la fábrica, para ver si el ajuste lo mejora. C y epsilon de SVR están en
+# GW, porque la tabla se arma con la serie escalada.
 REJILLAS = {
-    "KNN": (knn, {"n_neighbors": [5]}),
-    "SVR": (svr, {"C": [1.0], "epsilon": [0.1]}),
-    "Random Forest": (bosque, {"max_depth": [None], "min_samples_leaf": [1]}),
-    "XGBoost": (xgboost, {"max_depth": [3], "learning_rate": [0.1]}),
+    "KNN": (knn, {"n_neighbors": [3, 5, 10, 20]}),
+    "SVR": (svr, {"C": [0.1, 1.0, 10.0], "epsilon": [0.05, 0.1, 0.3]}),
+    "Random Forest": (bosque, {"max_depth": [None, 3, 6], "min_samples_leaf": [1, 3, 5]}),
+    "XGBoost": (xgboost, {"max_depth": [2, 3, 5], "learning_rate": [0.03, 0.1, 0.3]}),
 }
+# Validación temporal: cinco pliegues de seis meses, siempre hacia adelante.
+VALIDACION = TimeSeriesSplit(n_splits=5, test_size=6)
 
 
 def sin_prefijo(parametros):
     return {nombre.split("__")[-1]: valor for nombre, valor in parametros.items()}
 
 
-def ajustar_hiperparametros(serie):
-    """TODO: para cada modelo de REJILLAS, la combinación con menor RMSE en
-    validación temporal.
+def con_prefijo(fabrica, rejilla):
+    """En un make_pipeline las claves llevan el nombre del paso delante."""
+    modelo = fabrica()
+    if not hasattr(modelo, "steps"):
+        return rejilla
+    paso = modelo.steps[-1][0]
+    return {f"{paso}__{nombre}": valores for nombre, valores in rejilla.items()}
 
-    Arme la tabla con serie.iloc[:-N_PRUEBA], para que ninguno de los meses
-    del backtest decida, y busque con GridSearchCV y TimeSeriesSplit. KNN y
-    SVR son make_pipeline: sus claves en la rejilla llevan el prefijo del paso
-    (kneighborsregressor__n_neighbors). Imprima lo elegido y su RMSE de
-    validación. Devuelva {nombre: {hiperparámetro: valor}}; sin_prefijo
-    quita el prefijo.
-    """
-    raise NotImplementedError("hiperparámetros con validación temporal")
+
+def ajustar_hiperparametros(serie):
+    """Para cada modelo de REJILLAS, la combinación con menor RMSE en
+    validación temporal, usando solo los meses anteriores al backtest."""
+    X_val, z_val = filas_completas(serie.iloc[:-N_PRUEBA] / ESCALA)
+    elegidos = {}
+    print(f"  tabla de validación: {len(X_val)} filas, de {X_val.index[0]:%Y-%m} a "
+          f"{X_val.index[-1]:%Y-%m}; el backtest empieza después de {serie.index[-N_PRUEBA - 1]:%Y-%m}")
+    for i, (entrena, valida) in enumerate(VALIDACION.split(X_val), 1):
+        print(f"    pliegue {i}: entrena {len(entrena)} filas, valida "
+              f"{X_val.index[valida[0]]:%Y-%m} a {X_val.index[valida[-1]]:%Y-%m}")
+    for nombre, (fabrica, rejilla) in REJILLAS.items():
+        busqueda = GridSearchCV(fabrica(), con_prefijo(fabrica, rejilla), cv=VALIDACION,
+                                scoring="neg_root_mean_squared_error")
+        busqueda.fit(X_val, z_val)
+        elegidos[nombre] = sin_prefijo(busqueda.best_params_)
+        resultados = pd.DataFrame([sin_prefijo(p) for p in busqueda.cv_results_["params"]])
+        resultados["RMSE (MW)"] = -busqueda.cv_results_["mean_test_score"] * ESCALA
+        # La fila de los valores por defecto de la fábrica (todas las rejillas lo incluyen)
+        por_defecto = {k: p.default for k, p in inspect.signature(fabrica).parameters.items()}
+        igual = lambda v, d: pd.isna(v) if d is None else v == d   # None queda como NaN
+        es_defecto = np.all([[igual(v, por_defecto[k]) for v in resultados[k]] for k in rejilla],
+                            axis=0)
+        defecto = resultados.loc[es_defecto, "RMSE (MW)"]
+        print(f"  {nombre}: elegido {elegidos[nombre]}, RMSE de validación "
+              f"{-busqueda.best_score_ * ESCALA:.1f} MW; con los valores por defecto "
+              f"{defecto.iloc[0]:.1f} MW ({len(resultados)} combinaciones)")
+        print("    " + resultados.sort_values("RMSE (MW)").round({"RMSE (MW)": 1}).to_string(index=False)
+              .replace("\n", "\n    "))
+    return elegidos
+
+
+def comparar_objetivos(serie, filas_dif12):
+    """La parte 3 con los dos objetivos. Para cada uno, la misma rejilla y la
+    misma validación temporal (los mismos seis meses por pliegue, de 2014-02 a
+    2016-07) y después el backtest. Con dif12 el error de un paso en z es el
+    mismo error en el nivel, así que los RMSE de validación se comparan
+    directamente. El objetivo se decide con la validación, no con el
+    backtest. Guarda resultados/objetivo.csv; metricas.csv sigue con OBJETIVO."""
+    global OBJETIVO
+    anterior = OBJETIVO
+    filas = {}
+    try:
+        for obj in ("dif12", "nivel"):
+            OBJETIVO = obj
+            X_val, z_val = filas_completas(serie.iloc[:-N_PRUEBA] / ESCALA)
+            for nombre, (fabrica, rejilla) in REJILLAS.items():
+                busqueda = GridSearchCV(fabrica(), con_prefijo(fabrica, rejilla), cv=VALIDACION,
+                                        scoring="neg_root_mean_squared_error").fit(X_val, z_val)
+                filas[nombre, obj, "validación"] = -busqueda.best_score_ * ESCALA
+                if obj == "nivel":
+                    p = sin_prefijo(busqueda.best_params_)
+                    modelo = con_tabla(lambda f=fabrica, p=p: f(**p))
+                    filas[nombre, obj, "backtest"] = fila(f"{nombre} (nivel, {p})", serie, modelo)["RMSE"]
+    finally:
+        OBJETIVO = anterior
+    for f in filas_dif12:
+        filas[f["modelo"], "dif12", "backtest"] = f["RMSE"]
+    comparacion = pd.Series(filas).unstack([2, 1])[[("validación", "dif12"), ("validación", "nivel"),
+                                                    ("backtest", "dif12"), ("backtest", "nivel")]]
+    comparacion = comparacion.loc[list(REJILLAS)].round(1)
+    comparacion.columns = [f"RMSE {etapa} {obj}" for etapa, obj in comparacion.columns]
+    comparacion.to_csv(RESULTADOS / "objetivo.csv", index_label="modelo")
+    print("  RMSE del mismo modelo con los dos objetivos (MW):")
+    print("    " + comparacion.to_string().replace("\n", "\n    "))
 
 
 def graficar_importancia(serie, elegidos):
-    """TODO: importancia de las variables de Random Forest y XGBoost
-    (feature_importances_), ajustados con lo elegido; guarde
-    figuras/importancia.png."""
-    raise NotImplementedError("importancia de variables")
+    """Importancia de las variables de Random Forest y XGBoost, ajustados con
+    lo elegido y la tabla de los meses anteriores al backtest."""
+    X_val, z_val = filas_completas(serie.iloc[:-N_PRUEBA] / ESCALA)
+    figura, ejes = plt.subplots(1, 2, figsize=(10, 4.2), sharey=True)
+    for eje, nombre in zip(ejes, ["Random Forest", "XGBoost"]):
+        fabrica, _ = REJILLAS[nombre]
+        ajustado = fabrica(**elegidos[nombre]).fit(X_val, z_val)
+        importancia = pd.Series(ajustado.feature_importances_, index=X_val.columns)
+        print(f"  importancia en {nombre}: " + ", ".join(
+            f"{c} {v:.3f}" for c, v in importancia.sort_values(ascending=False).head(5).items()))
+        print(f"    mes {importancia['mes']:.3f}, desv_3 {importancia['desv_3']:.3f}")
+        eje.barh(importancia.index, importancia.to_numpy())
+        eje.set_title(nombre)
+        eje.set_xlabel("importancia (suma 1)")
+    ejes[0].invert_yaxis()
+    figura.tight_layout()
+    figura.savefig(FIGURAS / "importancia.png", dpi=120)
+    plt.close(figura)
 
 
 # ============================================================
@@ -470,6 +550,18 @@ def graficar_pronosticos(serie, modelos):
     plt.close(figura)
 
 
+def comparar_por_origen(serie, modelos):
+    """RMSE de cada modelo elegido en cada origen del backtest: en qué tramos
+    gana el clásico y en cuáles lo alcanza el mejor de los otros."""
+    por_origen = pd.DataFrame({nombre: backtest(serie, modelo)[0].set_index("origen")["RMSE"]
+                               for nombre, modelo in modelos.items()})
+    por_origen.index = por_origen.index.strftime("%Y-%m")
+    print("RMSE por origen de los modelos de la figura (MW):")
+    print(por_origen.round(0).to_string())
+    ganador = por_origen.idxmin(axis=1).value_counts()
+    print("orígenes ganados: " + ", ".join(f"{n} {c}" for n, c in ganador.items()))
+
+
 def pendiente(parte, error):
     print(f"  pendiente: {parte} ({error})")
 
@@ -515,6 +607,7 @@ def main():
                           for nombre, (fabrica, _) in REJILLAS.items()}
             filas_aa = [fila(nombre, serie, modelo) for nombre, modelo in modelos_aa.items()]
             filas += filas_aa
+            comparar_objetivos(serie, filas_aa)
             mejor_aa = min(filas_aa, key=lambda f: f["RMSE"])["modelo"]
             elegidos_para_figura[mejor_aa] = modelos_aa[mejor_aa]
         except NotImplementedError as error:
@@ -539,6 +632,7 @@ def main():
     print("Mejor modelo por RMSE:", tabla.iloc[0]["modelo"])
     if len(elegidos_para_figura) > 1:
         graficar_pronosticos(serie, elegidos_para_figura)
+        comparar_por_origen(serie, elegidos_para_figura)
     print(f"Tiempo total: {time.perf_counter() - inicio:.0f} s")
 
 

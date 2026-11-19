@@ -32,7 +32,7 @@ del grupo. Si falta algún dato, se advierte en la realimentación.
 | Nombre completo | Código | Correo institucional |
 |---|---|---|
 | Juan José Hoyos | 22507574 | juan.hoyos_u@uao.edu.co |
-| | | |
+| Ana Maria Bolaños | 22505061 | ana_mar.bolanos@uao.edu.co|
 | | | |
 
 ## Entrega
