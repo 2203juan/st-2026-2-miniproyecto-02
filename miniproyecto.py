@@ -317,6 +317,41 @@ def ajustar_hiperparametros(serie):
     return elegidos
 
 
+def comparar_objetivos(serie, filas_dif12):
+    """La parte 3 con los dos objetivos. Para cada uno, la misma rejilla y la
+    misma validación temporal (los mismos seis meses por pliegue, de 2014-02 a
+    2016-07) y después el backtest. Con dif12 el error de un paso en z es el
+    mismo error en el nivel, así que los RMSE de validación se comparan
+    directamente. El objetivo se decide con la validación, no con el
+    backtest. Guarda resultados/objetivo.csv; metricas.csv sigue con OBJETIVO."""
+    global OBJETIVO
+    anterior = OBJETIVO
+    filas = {}
+    try:
+        for obj in ("dif12", "nivel"):
+            OBJETIVO = obj
+            X_val, z_val = filas_completas(serie.iloc[:-N_PRUEBA] / ESCALA)
+            for nombre, (fabrica, rejilla) in REJILLAS.items():
+                busqueda = GridSearchCV(fabrica(), con_prefijo(fabrica, rejilla), cv=VALIDACION,
+                                        scoring="neg_root_mean_squared_error").fit(X_val, z_val)
+                filas[nombre, obj, "validación"] = -busqueda.best_score_ * ESCALA
+                if obj == "nivel":
+                    p = sin_prefijo(busqueda.best_params_)
+                    modelo = con_tabla(lambda f=fabrica, p=p: f(**p))
+                    filas[nombre, obj, "backtest"] = fila(f"{nombre} (nivel, {p})", serie, modelo)["RMSE"]
+    finally:
+        OBJETIVO = anterior
+    for f in filas_dif12:
+        filas[f["modelo"], "dif12", "backtest"] = f["RMSE"]
+    comparacion = pd.Series(filas).unstack([2, 1])[[("validación", "dif12"), ("validación", "nivel"),
+                                                    ("backtest", "dif12"), ("backtest", "nivel")]]
+    comparacion = comparacion.loc[list(REJILLAS)].round(1)
+    comparacion.columns = [f"RMSE {etapa} {obj}" for etapa, obj in comparacion.columns]
+    comparacion.to_csv(RESULTADOS / "objetivo.csv", index_label="modelo")
+    print("  RMSE del mismo modelo con los dos objetivos (MW):")
+    print("    " + comparacion.to_string().replace("\n", "\n    "))
+
+
 def graficar_importancia(serie, elegidos):
     """Importancia de las variables de Random Forest y XGBoost, ajustados con
     lo elegido y la tabla de los meses anteriores al backtest."""
@@ -560,6 +595,7 @@ def main():
                           for nombre, (fabrica, _) in REJILLAS.items()}
             filas_aa = [fila(nombre, serie, modelo) for nombre, modelo in modelos_aa.items()]
             filas += filas_aa
+            comparar_objetivos(serie, filas_aa)
             mejor_aa = min(filas_aa, key=lambda f: f["RMSE"])["modelo"]
             elegidos_para_figura[mejor_aa] = modelos_aa[mejor_aa]
         except NotImplementedError as error:

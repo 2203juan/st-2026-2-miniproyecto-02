@@ -1,0 +1,5 @@
+modelo,RMSE validación dif12,RMSE validación nivel,RMSE backtest dif12,RMSE backtest nivel
+KNN,661.0,942.6,904.2,872.3
+SVR,700.1,840.8,986.6,761.8
+Random Forest,710.1,697.8,970.0,926.1
+XGBoost,734.2,779.6,1029.5,839.6
